@@ -14,6 +14,7 @@ import requests
 import streamlit as st
 import plotly.graph_objs as go
 import yfinance as yf
+import pytz
 
 # ------------------------------
 # Utility: Black–Scholes + IV
@@ -33,7 +34,6 @@ def bs_price(S, K, T, r, q, sigma, option_type="C"):
         return K * math.exp(-r*T) * _norm_cdf(-d2) - S * math.exp(-q*T) * _norm_cdf(-d1)
 
 def implied_volatility(target_price, S, K, T, r=0.0, q=0.0, option_type="C", tol=1e-6, max_iter=100):
-    # Bisection for stability
     if target_price is None or target_price <= 0 or S <= 0 or K <= 0 or T <= 0:
         return np.nan
     low, high = 1e-6, 5.0
@@ -61,7 +61,6 @@ def compute_rsi(series, period=14):
     return rsi
 
 def compute_adx(df, period=14):
-    # df requires columns: High, Low, Close
     high = df['High']
     low = df['Low']
     close = df['Close']
@@ -98,15 +97,10 @@ NSE_HEADERS = {
 def nse_session():
     s = requests.Session()
     s.headers.update(NSE_HEADERS)
-    # Prime cookies
     s.get("https://www.nseindia.com", timeout=10)
     return s
 
 def fetch_option_chain(symbol="NIFTY"):
-    """
-    Returns JSON from NSE option chain for index.
-    symbol in {"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY"}
-    """
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
     s = nse_session()
     resp = s.get(url, timeout=15)
@@ -137,10 +131,7 @@ def parse_option_chain(json_data):
     return underlying, expiry_list, df
 
 def compute_pcr_from_chain(df, expiry=None):
-    if expiry:
-        dfe = df[df["expiry"] == expiry]
-    else:
-        dfe = df
+    dfe = df[df["expiry"] == expiry] if expiry else df
     call_oi = dfe["CE_oi"].fillna(0).sum()
     put_oi  = dfe["PE_oi"].fillna(0).sum()
     if call_oi == 0:
@@ -153,7 +144,7 @@ def nearest_atm_strike(spot, strikes):
 def compute_atm_straddle(df, spot, expiry):
     dfe = df[df["expiry"] == expiry]
     if dfe.empty:
-        return np.nan, np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, (np.nan, np.nan), (np.nan, np.nan)
     strike = nearest_atm_strike(spot, dfe["strike"].dropna().unique().tolist())
     row = dfe[dfe["strike"] == strike].iloc[0]
     ce = row.get("CE_ltp", np.nan)
@@ -164,16 +155,14 @@ def compute_atm_straddle(df, spot, expiry):
     return strike, ce, pe, total, ce_ba, pe_ba
 
 def derive_atm_iv(spot, strike, expiry_dt, ce_ltp, pe_ltp):
-    # Choose option with higher LTP for stability
     T = max((expiry_dt - datetime.now(timezone.utc)).total_seconds() / (365*24*3600), 1e-6)
     if np.isnan(T) or T <= 0:
         return np.nan, np.nan
-    ce_iv = implied_volatility(ce_ltp, spot, strike, T, r=0.0, q=0.0, option_type="C") if pd.notna(ce_ltp) else np.nan
-    pe_iv = implied_volatility(pe_ltp, spot, strike, T, r=0.0, q=0.0, option_type="P") if pd.notna(pe_ltp) else np.nan
+    ce_iv = implied_volatility(ce_ltp, spot, strike, T, option_type="C") if pd.notna(ce_ltp) else np.nan
+    pe_iv = implied_volatility(pe_ltp, spot, strike, T, option_type="P") if pd.notna(pe_ltp) else np.nan
     return ce_iv, pe_iv
 
 def nse_index_spot(symbol="NIFTY"):
-    # Fallback via yfinance for spot (since NSE spot endpoint is inconsistent)
     yf_symbol = "^NSEI" if symbol == "NIFTY" else "^NSEBANK" if symbol == "BANKNIFTY" else None
     if yf_symbol is None:
         return None
@@ -185,7 +174,6 @@ def nse_index_spot(symbol="NIFTY"):
         return None
 
 def fetch_india_vix_series():
-    # yfinance symbol for India VIX
     try:
         vix = yf.Ticker("^INDIAVIX").history(period="5d", interval="5m")["Close"]
         return vix
@@ -207,16 +195,9 @@ with st.sidebar:
     refresh_sec = st.slider("Auto-refresh (seconds)", min_value=15, max_value=180, value=60, step=15)
     tech_period = st.number_input("RSI/ADX Period", min_value=7, max_value=30, value=14, step=1)
     st.write(" ")
-
     st.info("Tip: Keep refresh >= 30s to avoid throttling.")
 
-# Auto-refresh
-st.cache_resource.clear()
-st_autorefresh = st.experimental_rerun
-
-st.experimental_set_query_params(last_refresh=str(time.time()))
-
-# Fetch option chain
+# --- Fetch option chain
 err = None
 try:
     oc_json = fetch_option_chain(symbol)
@@ -225,50 +206,43 @@ except Exception as e:
     oc_json, spot, expiries, oc_df = None, None, [], pd.DataFrame()
     err = str(e)
 
-# Spot fallback
 if spot is None:
     spot = nse_index_spot(symbol)
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-# VIX series
 vix_series = fetch_india_vix_series()
 vix_last = vix_series.iloc[-1] if vix_series is not None and len(vix_series) else np.nan
 
-# Choose expiry
 expiry_choice = expiries[0] if expiries else None
 
-# PCR
 pcr = compute_pcr_from_chain(oc_df, expiry_choice) if not oc_df.empty else np.nan
 
-# ATM Straddle & IV
 if not oc_df.empty and spot is not None and expiry_choice:
     strike, ce, pe, straddle, ce_ba, pe_ba = compute_atm_straddle(oc_df, spot, expiry_choice)
-    # Build expiry datetime (NSE expires at 15:30 IST; convert to UTC)
     try:
         expiry_dt_naive = datetime.strptime(expiry_choice, "%d-%b-%Y")
         expiry_dt_ist = expiry_dt_naive.replace(hour=15, minute=30)
-        # IST to UTC (IST=UTC+5:30)
-        expiry_dt_utc = expiry_dt_ist - timedelta(hours=5, minutes=30)
+        ist = pytz.timezone("Asia/Kolkata")
+        expiry_dt_ist = ist.localize(expiry_dt_ist)
+        expiry_dt_utc = expiry_dt_ist.astimezone(timezone.utc)
     except Exception:
-        expiry_dt_utc = datetime.utcnow()
+        expiry_dt_utc = datetime.now(timezone.utc)
     ce_iv, pe_iv = derive_atm_iv(spot, strike, expiry_dt_utc, ce, pe)
     bidask_spread_ce = (ce_ba[1] - ce_ba[0]) if all(pd.notna(x) for x in ce_ba) else np.nan
     bidask_spread_pe = (pe_ba[1] - pe_ba[0]) if all(pd.notna(x) for x in pe_ba) else np.nan
 else:
     strike = ce = pe = straddle = ce_iv = pe_iv = bidask_spread_ce = bidask_spread_pe = np.nan
 
-# RSI & ADX via yfinance intraday 1m
 yf_symbol = "^NSEI" if symbol == "NIFTY" else "^NSEBANK"
 try:
     hist = yf.Ticker(yf_symbol).history(period="2d", interval="1m").dropna()
     rsi = compute_rsi(hist["Close"], period=tech_period)
-    plus_di, minus_di, adx = compute_adx(hist.rename(columns={"High":"High","Low":"Low","Close":"Close"}), period=tech_period)
+    plus_di, minus_di, adx = compute_adx(hist, period=tech_period)
 except Exception:
     hist = None
     rsi = plus_di = minus_di = adx = None
 
-# KPI cards
 col1.metric("Spot", f"{spot:,.2f}" if pd.notna(spot) else "—")
 col2.metric("India VIX (last)", f"{vix_last:,.2f}" if pd.notna(vix_last) else "—")
 col3.metric("PCR (OI)", f"{pcr:,.2f}" if pd.notna(pcr) else "—")
@@ -278,7 +252,6 @@ col6.metric("ATM IV (PE)", f"{pe_iv*100:,.2f}%" if pd.notna(pe_iv) else "—")
 
 st.divider()
 
-# Charts
 left, right = st.columns([1,1])
 with left:
     st.subheader("India VIX (last 5 days, 5m)")
@@ -309,14 +282,13 @@ else:
 
 st.subheader(f"Option Chain (Top strikes near ATM) — {expiry_choice or ''}")
 if not oc_df.empty and pd.notna(spot):
-    # show strikes within ±6 steps of ATM
     strikes = sorted(oc_df["strike"].dropna().unique())
     if strikes:
         atm = nearest_atm_strike(spot, strikes)
         window = 6
-        near = [k for k in strikes if abs(k - atm) <= window * (strikes[1]-strikes[0] if len(strikes)>1 else 50)]
+        step = strikes[1]-strikes[0] if len(strikes)>1 else 50
+        near = [k for k in strikes if abs(k - atm) <= window * step]
         view = oc_df[(oc_df["expiry"]==expiry_choice) & (oc_df["strike"].isin(near))].copy()
-        # Order columns for readability
         view = view.sort_values("strike")
         cols = ["strike","CE_bid","CE_ask","CE_ltp","CE_oi","PE_bid","PE_ask","PE_ltp","PE_oi"]
         st.dataframe(view[cols].reset_index(drop=True), use_container_width=True)
@@ -325,7 +297,7 @@ else:
 
 st.caption("⚠️ Data is fetched from public sources (NSE / Yahoo) and may be delayed or rate-limited. Do not use for automated trading.")
 
-# Gentle auto-refresh using javascript meta refresh (fallback)
+# --- Auto-refresh fallback (JS reload)
 st.markdown(f"""
 <script>
 setTimeout(function(){{
