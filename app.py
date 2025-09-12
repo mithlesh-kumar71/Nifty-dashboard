@@ -6,7 +6,7 @@ from nsepython import option_chain
 import yfinance as yf
 
 # Title
-st.title("Live NIFTY Option Chain with PCR (ATM ± 500)")
+st.title("Live NIFTY Option Chain with PCR (ATM ± 300)")
 
 # Get current NIFTY spot price
 def get_nifty_spot():
@@ -44,10 +44,10 @@ def get_option_chain(symbol="NIFTY"):
         st.error(f"Failed to fetch Option Chain: {e}")
         return pd.DataFrame()
 
-# Filter ATM ± 500 points
-def filter_atm_range(df, spot_price):
-    lower = spot_price - 500
-    upper = spot_price + 500
+# Filter ATM ± 300 points
+def filter_atm_range(df, spot_price, buffer=300):
+    lower = spot_price - buffer
+    upper = spot_price + buffer
     return df[(df["Strike Price"] >= lower) & (df["Strike Price"] <= upper)]
 
 # Calculate PCR
@@ -56,35 +56,6 @@ def calculate_pcr(df):
     total_pe = df["PE_OI"].sum()
     return round(total_pe / total_ce, 2) if total_ce > 0 else None
 
-# Save to Excel
-def save_to_excel(df, filename="nifty_option_chain.xlsx"):
-    try:
-        with pd.ExcelWriter(filename, engine="openpyxl", mode="w") as writer:
-            df.to_excel(writer, sheet_name="OptionChain", index=False)
-        st.success(f"Saved live data to {filename}")
-    except Exception as e:
-        st.error(f"Excel save error: {e}")
-
-# Main Execution
-spot_price = get_nifty_spot()
-if spot_price:
-    st.write(f"### Current NIFTY Spot Price: {spot_price}")
-
-    df_oc = get_option_chain("NIFTY")
-    if not df_oc.empty:
-        df_filtered = filter_atm_range(df_oc, spot_price)
-        pcr = calculate_pcr(df_filtered)
-
-        st.write("### Option Chain Data (ATM ± 500)")
-        st.dataframe(df_filtered)
-
-        st.write(f"### Put-Call Ratio (PCR): {pcr}")
-
-        # Save filtered data to Excel
-        save_to_excel(df_filtered)
-
-        # Refresh button
-        if st.button("Refresh Now"):
-            st.experimental_rerun()
-else:
-    st.error("Unable to fetch NIFTY spot price.")
+# Highlight ATM Strike
+def highlight_atm(row, atm_strike):
+    color = 'background-color: yellow' if row["Strike Price"] == atm
