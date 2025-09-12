@@ -1,80 +1,86 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import yfinance as yf
-import plotly.graph_objects as go
-import ta
-from datetime import datetime
+import datetime
+import time
 from nsepython import option_chain
+import yfinance as yf
 
-# -------------------------
-# Page config
-# -------------------------
-st.set_page_config(page_title="Intraday Strategy Dashboard", layout="wide")
-st.title("📊 NSE Intraday Strategy + Options Dashboard")
+# Title
+st.title("Live NIFTY Option Chain with PCR (ATM ± 500)")
 
-# -------------------------
-# Sidebar controls
-# -------------------------
-symbol = st.sidebar.text_input("Symbol (Yahoo Finance)", "^NSEI")
-interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m", "15m", "60m", "1d"], index=2)
-chart_type = st.sidebar.radio("Chart Type", ["Candlestick", "Line"], horizontal=True)
-period = st.sidebar.selectbox("Historical Period", ["1d", "5d", "1mo", "3mo", "6mo", "1y"], index=1)
+# Get current NIFTY spot price
+def get_nifty_spot():
+    ticker = yf.Ticker("^NSEI")
+    data = ticker.history(period="1d", interval="1m")
+    if not data.empty:
+        return round(data["Close"].iloc[-1], 2)
+    return None
 
-# -------------------------
-# Fetch price data
-# -------------------------
-@st.cache_data(ttl=60)
-def fetch_price(sym, per, intv):
-    df = yf.Ticker(sym).history(period=per, interval=intv).reset_index().dropna()
-    df.rename(columns={"Datetime": "Date"}, inplace=True)
-    return df
+# Fetch Option Chain
+def get_option_chain(symbol="NIFTY"):
+    try:
+        data = option_chain(symbol)
+        records = data['records']['data']
+        oc_rows = []
+        for r in records:
+            ce_data = r.get("CE", None)
+            pe_data = r.get("PE", None)
+            if ce_data and pe_data:
+                oc_rows.append({
+                    "Strike Price": r["strikePrice"],
+                    "CE_OI": ce_data.get("openInterest", 0),
+                    "CE_Chng_OI": ce_data.get("changeinOpenInterest", 0),
+                    "PE_OI": pe_data.get("openInterest", 0),
+                    "PE_Chng_OI": pe_data.get("changeinOpenInterest", 0)
+                })
+        df = pd.DataFrame(oc_rows)
+        return df
+    except Exception as e:
+        st.error(f"Failed to fetch Option Chain: {e}")
+        return pd.DataFrame()
 
-df = fetch_price(symbol, period, interval)
-if df.empty:
-    st.error("No OHLC data found. Try changing symbol or interval.")
-    st.stop()
+# Filter ATM ± 500 points
+def filter_atm_range(df, spot_price):
+    lower = spot_price - 500
+    upper = spot_price + 500
+    return df[(df["Strike Price"] >= lower) & (df["Strike Price"] <= upper)]
 
-# -------------------------
-# Indicators
-# -------------------------
-def atr(df, period=14):
-    high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+# Calculate PCR
+def calculate_pcr(df):
+    total_ce = df["CE_OI"].sum()
+    total_pe = df["PE_OI"].sum()
+    return round(total_pe / total_ce, 2) if total_ce > 0 else None
 
-def supertrend(df, period=10, multiplier=3):
-    out = df.copy()
-    _atr = atr(out, period)
-    hl2 = (out["High"] + out["Low"]) / 2
-    upperband = hl2 + multiplier * _atr
-    lowerband = hl2 - multiplier * _atr
-    final_upperband = upperband.copy()
-    final_lowerband = lowerband.copy()
+# Save to Excel
+def save_to_excel(df, filename="nifty_option_chain.xlsx"):
+    try:
+        with pd.ExcelWriter(filename, engine="openpyxl", mode="w") as writer:
+            df.to_excel(writer, sheet_name="OptionChain", index=False)
+        st.success(f"Saved live data to {filename}")
+    except Exception as e:
+        st.error(f"Excel save error: {e}")
 
-    for i in range(1, len(out)):
-        final_upperband.iloc[i] = min(
-            upperband.iloc[i], final_upperband.iloc[i - 1]
-        ) if out["Close"].iloc[i - 1] <= final_upperband.iloc[i - 1] else upperband.iloc[i]
-        final_lowerband.iloc[i] = max(
-            lowerband.iloc[i], final_lowerband.iloc[i - 1]
-        ) if out["Close"].iloc[i - 1] >= final_lowerband.iloc[i - 1] else lowerband.iloc[i]
+# Main Execution
+spot_price = get_nifty_spot()
+if spot_price:
+    st.write(f"### Current NIFTY Spot Price: {spot_price}")
 
-    trend = np.ones(len(out))
-    st_line = np.zeros(len(out))
-    for i in range(len(out)):
-        if i == 0:
-            trend[i] = 1
-            st_line[i] = final_lowerband.iloc[i]
-        else:
-            if out["Close"].iloc[i] > final_upperband.iloc[i - 1]:
-                trend[i] = 1
-            elif out["Close"].iloc[i] < final_lowerband.iloc[i - 1]:
-                trend[i] = -1
-            else:
-                trend[i] = trend[i - 1]
-            st_line[i] = final_lowerband.iloc[i] if trend[i] == 1 else final_upperband.iloc[i]
+    df_oc = get_option_chain("NIFTY")
+    if not df_oc.empty:
+        df_filtered = filter_atm_range(df_oc, spot_price)
+        pcr = calculate_pcr(df_filtered)
 
-    out["]()
+        st.write("### Option Chain Data (ATM ± 500)")
+        st.dataframe(df_filtered)
+
+        st.write(f"### Put-Call Ratio (PCR): {pcr}")
+
+        # Save filtered data to Excel
+        save_to_excel(df_filtered)
+
+        # Auto-refresh every 15 mins
+        st_autorefresh = st.button("Refresh Now")
+        if st_autorefresh:
+            st.experimental_rerun()
+else:
+    st.error("Unable to fetch NIFTY spot price.")
