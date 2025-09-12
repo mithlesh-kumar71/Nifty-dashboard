@@ -58,4 +58,41 @@ def calculate_pcr(df):
 
 # Highlight ATM Strike
 def highlight_atm(row, atm_strike):
-    color = 'background-color: yellow' if row["Strike Price"] == atm
+    return ['background-color: yellow' if row["Strike Price"] == atm_strike else '' for _ in row]
+
+# Save to Excel
+def save_to_excel(df, filename="nifty_option_chain.xlsx"):
+    try:
+        with pd.ExcelWriter(filename, engine="openpyxl", mode="w") as writer:
+            df.to_excel(writer, sheet_name="OptionChain", index=False)
+        st.success(f"Saved live data to {filename}")
+    except Exception as e:
+        st.error(f"Excel save error: {e}")
+
+# Main Execution
+spot_price = get_nifty_spot()
+if spot_price:
+    st.write(f"### Current NIFTY Spot Price: {spot_price}")
+
+    df_oc = get_option_chain("NIFTY")
+    if not df_oc.empty:
+        df_filtered = filter_atm_range(df_oc, spot_price, buffer=300)
+
+        # Find nearest ATM strike
+        atm_strike = min(df_filtered["Strike Price"], key=lambda x: abs(x - spot_price))
+
+        pcr = calculate_pcr(df_filtered)
+
+        st.write("### Option Chain Data (ATM ± 300)")
+        st.dataframe(df_filtered.style.apply(highlight_atm, atm_strike=atm_strike, axis=1))
+
+        st.write(f"### Put-Call Ratio (PCR): {pcr}")
+
+        # Save filtered data to Excel
+        save_to_excel(df_filtered)
+
+        # Refresh button
+        if st.button("Refresh Now"):
+            st.experimental_rerun()
+else:
+    st.error("Unable to fetch NIFTY spot price.")
