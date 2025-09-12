@@ -53,7 +53,8 @@ def filter_atm_range(df, spot_price, buffer=300):
 def calculate_pcr(df):
     total_ce = df["CE_OI"].sum()
     total_pe = df["PE_OI"].sum()
-    return round(total_pe / total_ce, 2) if total_ce > 0 else None, total_ce, total_pe
+    pcr = round(total_pe / total_ce, 2) if total_ce > 0 else None
+    return pcr, total_ce, total_pe
 
 # --- Highlight ATM Strike ---
 def highlight_atm(row, atm_strike):
@@ -68,7 +69,7 @@ def get_current_slot():
 
 # --- Save PCR + OI Trend to Excel ---
 def save_trend(time_slot, pcr, total_ce, total_pe, filename="pcr_oi_trend.xlsx"):
-    new_row = pd.DataFrame([[time_slot, pcr, total_ce, total_pe]],
+    new_row = pd.DataFrame([[time_slot, round(pcr,2), total_ce, total_pe]],
                            columns=["Time Slot", "PCR", "Total CE OI", "Total PE OI"])
 
     if os.path.exists(filename):
@@ -96,10 +97,16 @@ if spot_price:
         pcr, total_ce, total_pe = calculate_pcr(df_filtered)
         time_slot = get_current_slot()
 
-        st.write(f"### Current PCR: {pcr} | CE OI: {total_ce:,} | PE OI: {total_pe:,} at {time_slot}")
+        st.write(f"### Current PCR: {pcr:.2f} | CE OI: {total_ce:,} | PE OI: {total_pe:,} at {time_slot}")
 
         # Display Option Chain
-        st.dataframe(df_filtered.style.apply(highlight_atm, atm_strike=atm_strike, axis=1))
+        st.dataframe(df_filtered.style.apply(highlight_atm, atm_strike=atm_strike, axis=1).format({
+            "PE/CE_Chng_OI_Ratio": "{:.2f}",
+            "CE_OI": "{:,}",
+            "PE_OI": "{:,}",
+            "CE_Chng_OI": "{:,}",
+            "PE_Chng_OI": "{:,}"
+        }))
 
         # Save Trend Data
         df_trend = save_trend(time_slot, pcr, total_ce, total_pe)
