@@ -3,20 +3,15 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from datetime import datetime
 import ta
-import os
-import time
-
-# For NSE Option Chain
+from datetime import datetime
 from nsepython import option_chain
-from openpyxl import load_workbook
 
 # -------------------------
 # Page config
 # -------------------------
 st.set_page_config(page_title="Intraday Strategy Dashboard", layout="wide")
-st.title("📊 NSE Intraday Strategy + Options Dashboard with Excel Export")
+st.title("📊 NSE Intraday Strategy + Options Dashboard")
 
 # -------------------------
 # Sidebar controls
@@ -24,7 +19,7 @@ st.title("📊 NSE Intraday Strategy + Options Dashboard with Excel Export")
 symbol = st.sidebar.text_input("Symbol (Yahoo Finance)", "^NSEI")
 interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m", "15m", "60m", "1d"], index=2)
 chart_type = st.sidebar.radio("Chart Type", ["Candlestick", "Line"], horizontal=True)
-period = st.sidebar.selectbox("Historical Period", ["1d","5d","1mo","3mo","6mo","1y"], index=1)
+period = st.sidebar.selectbox("Historical Period", ["1d", "5d", "1mo", "3mo", "6mo", "1y"], index=1)
 
 # -------------------------
 # Fetch price data
@@ -32,7 +27,7 @@ period = st.sidebar.selectbox("Historical Period", ["1d","5d","1mo","3mo","6mo",
 @st.cache_data(ttl=60)
 def fetch_price(sym, per, intv):
     df = yf.Ticker(sym).history(period=per, interval=intv).reset_index().dropna()
-    df.rename(columns={"Datetime":"Date"}, inplace=True)
+    df.rename(columns={"Datetime": "Date"}, inplace=True)
     return df
 
 df = fetch_price(symbol, period, interval)
@@ -54,14 +49,18 @@ def supertrend(df, period=10, multiplier=3):
     out = df.copy()
     _atr = atr(out, period)
     hl2 = (out["High"] + out["Low"]) / 2
-    upperband = hl2 + multiplier*_atr
-    lowerband = hl2 - multiplier*_atr
+    upperband = hl2 + multiplier * _atr
+    lowerband = hl2 - multiplier * _atr
     final_upperband = upperband.copy()
     final_lowerband = lowerband.copy()
 
     for i in range(1, len(out)):
-        final_upperband.iloc[i] = min(upperband.iloc[i], final_upperband.iloc[i-1]) if out["Close"].iloc[i-1] <= final_upperband.iloc[i-1] else upperband.iloc[i]
-        final_lowerband.iloc[i] = max(lowerband.iloc[i], final_lowerband.iloc[i-1]) if out["Close"].iloc[i-1] >= final_lowerband.iloc[i-1] else lowerband.iloc[i]
+        final_upperband.iloc[i] = min(
+            upperband.iloc[i], final_upperband.iloc[i - 1]
+        ) if out["Close"].iloc[i - 1] <= final_upperband.iloc[i - 1] else upperband.iloc[i]
+        final_lowerband.iloc[i] = max(
+            lowerband.iloc[i], final_lowerband.iloc[i - 1]
+        ) if out["Close"].iloc[i - 1] >= final_lowerband.iloc[i - 1] else lowerband.iloc[i]
 
     trend = np.ones(len(out))
     st_line = np.zeros(len(out))
@@ -70,13 +69,13 @@ def supertrend(df, period=10, multiplier=3):
             trend[i] = 1
             st_line[i] = final_lowerband.iloc[i]
         else:
-            if out["Close"].iloc[i] > final_upperband.iloc[i-1]:
+            if out["Close"].iloc[i] > final_upperband.iloc[i - 1]:
                 trend[i] = 1
-            elif out["Close"].iloc[i] < final_lowerband.iloc[i-1]:
+            elif out["Close"].iloc[i] < final_lowerband.iloc[i - 1]:
                 trend[i] = -1
             else:
-                trend[i] = trend[i-1]
-            st_line[i] = final_lowerband.iloc[i] if trend[i]==1 else final_upperband.iloc[i]
+                trend[i] = trend[i - 1]
+            st_line[i] = final_lowerband.iloc[i] if trend[i] == 1 else final_upperband.iloc[i]
 
     out["ST"] = st_line
     out["Trend"] = trend
@@ -85,21 +84,23 @@ def supertrend(df, period=10, multiplier=3):
 df = supertrend(df)
 df["RSI"] = ta.momentum.RSIIndicator(df["Close"], 14).rsi()
 df["ADX"] = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], 14).adx()
-df["VWAP"] = (df["Close"]*df["Volume"]).cumsum() / df["Volume"].cumsum()
+df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
 
 # -------------------------
 # Strategy signals
 # -------------------------
 df["Signal"] = 0
-df.loc[(df["Trend"]==1) & (df["RSI"]>60) & (df["Close"]>df["VWAP"]), "Signal"] = 1  # Buy
-df.loc[(df["Trend"]==-1) & (df["RSI"]<40) & (df["Close"]<df["VWAP"]), "Signal"] = -1  # Sell
+df.loc[(df["Trend"] == 1) & (df["RSI"] > 60) & (df["Close"] > df["VWAP"]), "Signal"] = 1  # Buy
+df.loc[(df["Trend"] == -1) & (df["RSI"] < 40) & (df["Close"] < df["VWAP"]), "Signal"] = -1  # Sell
 
 # -------------------------
 # Plotting Price + Indicators
 # -------------------------
 fig = go.Figure()
-if chart_type=="Candlestick":
-    fig.add_trace(go.Candlestick(x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candlestick"))
+if chart_type == "Candlestick":
+    fig.add_trace(go.Candlestick(
+        x=df["Date"], open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"], name="Candlestick"))
 else:
     fig.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Close"))
 
@@ -123,54 +124,37 @@ with c2:
     st.plotly_chart(fig_adx, use_container_width=True)
 
 # -------------------------
-# Option Chain & Change in OI
+# Option Chain & PCR (Filtered)
 # -------------------------
-st.subheader("Live Option Chain, PCR & Change in OI")
+st.subheader("Live Option Chain & PCR (Nearest Expiry)")
 
-# Mapping Yahoo symbol → NSE OC
-yahoo_to_nse = {
-    "^NSEI": "NIFTY",
-    "^NSEBANK": "BANKNIFTY",
-    "^NSEFIN": "FINNIFTY",
-    "^MIDCPNIFTY": "MIDCPNIFTY"
-}
+try:
+    ocj = option_chain("NIFTY")
+    underlying = ocj['records']['underlyingValue']
+    expiry = ocj['records']['expiryDates'][0]
 
-symbol_key = yahoo_to_nse.get(symbol.upper(), None)
+    data = [
+        {
+            "strike": d["strikePrice"],
+            "CE_OI": d.get("CE", {}).get("openInterest", 0),
+            "PE_OI": d.get("PE", {}).get("openInterest", 0),
+            "expiry": d["expiryDate"]
+        }
+        for d in ocj["records"]["data"]
+        if d["expiryDate"] == expiry
+    ]
+    df_oc = pd.DataFrame(data)
 
-if symbol_key:
-    try:
-        oc = option_chain(symbol_key)
-        records = oc["records"]["data"]
+    # Filter strikes within ±1000 points of spot
+    df_oc = df_oc[(df_oc["strike"] >= underlying - 1000) & (df_oc["strike"] <= underlying + 1000)]
 
-        df_oc = pd.DataFrame([
-            {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "strike": d["strikePrice"],
-                "CE_OI": d.get("CE", {}).get("openInterest", 0),
-                "PE_OI": d.get("PE", {}).get("openInterest", 0),
-                "CE_ChangeOI": d.get("CE", {}).get("changeinOpenInterest", 0),
-                "PE_ChangeOI": d.get("PE", {}).get("changeinOpenInterest", 0),
-            }
-            for d in records
-        ])
+    pcr = df_oc["PE_OI"].sum() / max(df_oc["CE_OI"].sum(), 1)
 
-        # Save to Excel (append mode)
-        file_name = "oi_data.xlsx"
-        if not os.path.exists(file_name):
-            df_oc.to_excel(file_name, index=False, sheet_name="OI_Data")
-        else:
-            with pd.ExcelWriter(file_name, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                df_oc.to_excel(writer, index=False, header=False, startrow=writer.sheets["OI_Data"].max_row, sheet_name="OI_Data")
+    st.write(f"Underlying: {underlying:.2f} | Expiry: {expiry} | PCR: {pcr:.2f}")
+    st.dataframe(df_oc.sort_values("strike"))
 
-        # Display on Streamlit
-        pcr = df_oc["PE_OI"].sum() / max(df_oc["CE_OI"].sum(), 1)
-        st.write(f"PCR: {pcr:.2f}")
-        st.dataframe(df_oc.head(20))
-
-    except Exception as e:
-        st.warning(f"Error fetching Option Chain: {e}")
-else:
-    st.info("Option Chain available only for NIFTY, BANKNIFTY, FINNIFTY, and MIDCPNIFTY.")
+except Exception as e:
+    st.error(f"Error fetching Option Chain: {e}")
 
 # -------------------------
 # Historical data & download
