@@ -3,10 +3,11 @@ import pandas as pd
 import datetime
 import yfinance as yf
 from nsepython import option_chain
+import plotly.graph_objects as go
 import os
 
 # Title
-st.title("📊 NIFTY Option Chain + PCR & OI Trend (ATM ± 300)")
+st.title("📊 NIFTY Option Chain + PCR & OI Ratio Dashboard (ATM ± 300)")
 
 # --- Get NIFTY Spot Price ---
 def get_nifty_spot():
@@ -81,6 +82,24 @@ def save_trend(time_slot, pcr, total_ce, total_pe, filename="pcr_oi_trend.xlsx")
     df.to_excel(filename, index=False)
     return df
 
+# --- Gauge display ---
+def display_gauge(value, title):
+    color = "green" if value > 1 else "red" if value < 1 else "yellow"
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        title={'text': title},
+        gauge={
+            'axis': {'range':[0, 2]},
+            'bar': {'color': color},
+            'steps': [
+                {'range':[0,1], 'color':'red'},
+                {'range':[1,2], 'color':'green'}
+            ]
+        }
+    ))
+    st.plotly_chart(fig, use_container_width=True)
+
 # --- Main ---
 spot_price = get_nifty_spot()
 if spot_price:
@@ -99,7 +118,7 @@ if spot_price:
 
         st.write(f"### Current PCR: {pcr:.2f} | CE OI: {total_ce:,} | PE OI: {total_pe:,} at {time_slot}")
 
-        # Display Option Chain
+        # Display Option Chain Table
         st.dataframe(df_filtered.style.apply(highlight_atm, atm_strike=atm_strike, axis=1).format({
             "PE/CE_Chng_OI_Ratio": "{:.2f}",
             "CE_OI": "{:,}",
@@ -110,6 +129,15 @@ if spot_price:
 
         # Save Trend Data
         df_trend = save_trend(time_slot, pcr, total_ce, total_pe)
+
+        # --- Gauge Display ---
+        st.subheader("📊 PCR Gauge")
+        display_gauge(pcr, "PCR (PE/CE OI)")
+
+        # Gauge for latest PE/CE Change Ratio (last row)
+        st.subheader("📊 Latest PE/CE Change in OI Gauge")
+        latest_ratio = df_filtered["PE/CE_Chng_OI_Ratio"].iloc[df_filtered.index.get_loc(atm_strike)]
+        display_gauge(latest_ratio, "PE/CE Change in OI")
 
         # PCR Trend
         st.subheader("📈 PCR Trend (Intraday)")
