@@ -26,12 +26,17 @@ def get_option_chain(symbol="NIFTY"):
             ce_data = r.get("CE", None)
             pe_data = r.get("PE", None)
             if ce_data and pe_data:
+                ce_chg_oi = ce_data.get("changeinOpenInterest", 0)
+                pe_chg_oi = pe_data.get("changeinOpenInterest", 0)
+                ratio = round(pe_chg_oi / ce_chg_oi, 2) if ce_chg_oi != 0 else None
+
                 oc_rows.append({
                     "Strike Price": r["strikePrice"],
                     "CE_OI": ce_data.get("openInterest", 0),
-                    "CE_Chng_OI": ce_data.get("changeinOpenInterest", 0),
+                    "CE_Chng_OI": ce_chg_oi,
                     "PE_OI": pe_data.get("openInterest", 0),
-                    "PE_Chng_OI": pe_data.get("changeinOpenInterest", 0)
+                    "PE_Chng_OI": pe_chg_oi,
+                    "PE/CE_Chng_OI_Ratio": ratio
                 })
         df = pd.DataFrame(oc_rows)
         return df
@@ -78,9 +83,8 @@ if spot_price:
         # Save filtered data to Excel
         save_to_excel(df_filtered)
 
-        # Auto-refresh every 15 mins
-        st_autorefresh = st.button("Refresh Now")
-        if st_autorefresh:
+        # Refresh button
+        if st.button("Refresh Now"):
             st.experimental_rerun()
 else:
     st.error("Unable to fetch NIFTY spot price.")
