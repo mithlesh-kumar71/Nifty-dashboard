@@ -6,7 +6,7 @@ from nsepython import option_chain
 import yfinance as yf
 
 # Title
-st.title("Live NIFTY Option Chain with PCR (ATM ± 300)")
+st.title("Live NIFTY Option Chain with PCR (ATM ± 300) + Time Slots")
 
 # Get current NIFTY spot price
 def get_nifty_spot():
@@ -60,6 +60,21 @@ def calculate_pcr(df):
 def highlight_atm(row, atm_strike):
     return ['background-color: yellow' if row["Strike Price"] == atm_strike else '' for _ in row]
 
+# Generate 15-min time slots
+def generate_time_slots():
+    start = datetime.datetime.combine(datetime.date.today(), datetime.time(9, 15))
+    end = datetime.datetime.combine(datetime.date.today(), datetime.time(15, 30))
+    slots = pd.date_range(start=start, end=end, freq="15min").time
+    return slots
+
+# Get nearest time slot for current time
+def get_current_slot():
+    now = datetime.datetime.now().time()
+    slots = generate_time_slots()
+    # nearest slot
+    nearest = min(slots, key=lambda t: abs(datetime.datetime.combine(datetime.date.today(), t) - datetime.datetime.combine(datetime.date.today(), now)))
+    return nearest.strftime("%H:%M")
+
 # Save to Excel
 def save_to_excel(df, filename="nifty_option_chain.xlsx"):
     try:
@@ -81,6 +96,10 @@ if spot_price:
         # Find nearest ATM strike
         atm_strike = min(df_filtered["Strike Price"], key=lambda x: abs(x - spot_price))
 
+        # Add current time slot column
+        df_filtered.insert(0, "Time Slot", get_current_slot())
+
+        # PCR
         pcr = calculate_pcr(df_filtered)
 
         st.write("### Option Chain Data (ATM ± 300)")
