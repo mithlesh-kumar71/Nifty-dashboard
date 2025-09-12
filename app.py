@@ -98,12 +98,6 @@ fig.update_layout(title=f"{symbol} Intraday Chart", template="plotly_dark", xaxi
 st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------
-# RSI chart
-# -------------------------
-st.subheader("RSI Chart")
-st.line_chart(df[["RSI"]])
-
-# -------------------------
 # Fetch Option Chain
 # -------------------------
 st.subheader("ATM ±300 Option Chain & PCR")
@@ -117,11 +111,7 @@ else:
 if oc:
     underlying = oc['records']['underlyingValue']
     data = oc['records']['data']
-    strikes = []
-    ce_oi = []
-    pe_oi = []
-    ce_chng = []
-    pe_chng = []
+    strikes, ce_oi, pe_oi, ce_chng, pe_chng = [],[],[],[],[]
     for d in data:
         strikes.append(d['strikePrice'])
         ce = d.get('CE', {})
@@ -138,6 +128,7 @@ if oc:
         "PE_Chng_OI": pe_chng
     })
     df_oc["PE/CE_Chng_OI_Ratio"] = (df_oc["PE_Chng_OI"]/df_oc["CE_Chng_OI"]).replace(np.inf, np.nan).round(2)
+    
     atm_strike = df_oc.iloc[(df_oc["Strike Price"] - underlying).abs().argsort()[:1]]["Strike Price"].values[0]
     df_oc_filtered = df_oc[(df_oc["Strike Price"] >= atm_strike-300) & (df_oc["Strike Price"] <= atm_strike+300)]
     
@@ -146,11 +137,27 @@ if oc:
         return ['background-color: yellow' if row["Strike Price"]==atm_strike else '' for _ in row]
     st.dataframe(df_oc_filtered.style.apply(highlight_atm, axis=1).format("{:.2f}"))
     
-    # PCR and PE/CE OI ratio display
+    # PCR and PE/CE OI ratio
     pcr = df_oc_filtered["PE_OI"].sum()/max(df_oc_filtered["CE_OI"].sum(),1)
     latest_ratio = df_oc_filtered.loc[df_oc_filtered["Strike Price"]==atm_strike,"PE/CE_Chng_OI_Ratio"].values[0]
     st.metric("PCR", f"{pcr:.2f}")
     st.metric("ATM PE/CE Change OI Ratio", f"{latest_ratio:.2f}")
+    
+    # -------------------------
+    # Line chart for ATM PE/CE change OI ratio
+    # -------------------------
+    st.subheader("ATM PE/CE Change OI Ratio Over Strikes")
+    fig_ratio = go.Figure()
+    fig_ratio.add_trace(go.Scatter(
+        x=df_oc_filtered["Strike Price"],
+        y=df_oc_filtered["PE/CE_Chng_OI_Ratio"],
+        mode="lines+markers",
+        line=dict(color="orange"),
+        name="PE/CE Chng OI Ratio"
+    ))
+    fig_ratio.add_hline(y=1, line_dash="dash", line_color="gray", annotation_text="Neutral (1)", annotation_position="bottom right")
+    fig_ratio.update_layout(template="plotly_dark", yaxis_title="PE/CE Change OI Ratio")
+    st.plotly_chart(fig_ratio, use_container_width=True)
 
 # -------------------------
 # Historical data
