@@ -19,7 +19,6 @@ st.title("📊 NSE Intraday Strategy + Options Dashboard")
 symbol = st.sidebar.text_input("Symbol (Yahoo Finance)", "^NSEI")
 interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m", "15m", "60m", "1d"], index=2)
 chart_type = st.sidebar.radio("Chart Type", ["Candlestick", "Line"], horizontal=True)
-refresh_sec = st.sidebar.slider("Refresh every (sec)", 30, 300, 60, 30)
 period = st.sidebar.selectbox("Historical Period", ["1d","5d","1mo","3mo","6mo","1y"], index=1)
 
 # -------------------------
@@ -28,7 +27,8 @@ period = st.sidebar.selectbox("Historical Period", ["1d","5d","1mo","3mo","6mo",
 @st.cache_data(ttl=60)
 def fetch_price(sym, per, intv):
     df = yf.Ticker(sym).history(period=per, interval=intv).reset_index().dropna()
-    df.rename(columns={"Datetime":"Date"}, inplace=True)
+    if "Datetime" in df.columns:
+        df.rename(columns={"Datetime":"Date"}, inplace=True)
     return df
 
 df = fetch_price(symbol, period, interval)
@@ -81,7 +81,13 @@ def supertrend(df, period=10, multiplier=3):
 df = supertrend(df)
 df["RSI"] = ta.momentum.RSIIndicator(df["Close"], 14).rsi()
 df["ADX"] = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], 14).adx()
-df["VWAP"] = (df["Close"]*df["Volume"]).cumsum() / df["Volume"].cumsum()
+
+# VWAP session-wise
+df["Date_only"] = df["Date"].dt.date
+df["CumVolPrice"] = df["Close"] * df["Volume"]
+df["CumVol"] = df.groupby("Date_only")["Volume"].cumsum()
+df["CumVolPrice"] = df.groupby("Date_only")["CumVolPrice"].cumsum()
+df["VWAP"] = df["CumVolPrice"] / df["CumVol"]
 
 # -------------------------
 # Strategy signals
@@ -95,12 +101,14 @@ df.loc[(df["Trend"]==-1) & (df["RSI"]<40) & (df["Close"]<df["VWAP"]), "Signal"] 
 # -------------------------
 fig = go.Figure()
 if chart_type=="Candlestick":
-    fig.add_trace(go.Candlestick(x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candlestick"))
+    fig.add_trace(go.Candlestick(
+        x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candlestick"
+    ))
 else:
     fig.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Close"))
 
 fig.add_trace(go.Scatter(x=df["Date"], y=df["ST"], mode="lines", name="Supertrend", line=dict(color="orange")))
-fig.add_trace(go.Scatter(x=df["Date"], y=df["VWAP"], mode="lines", name="VWAP", line=dict(color="cyan", dash="dot")))
+fig.add_trace(go.Scatter(x=df["Date"], y=df["VWAP"], mode="lines", name="VWAP", line=dict(color="yellow", width=2, dash="dot")))
 fig.update_layout(title=f"{symbol} Intraday Chart", template="plotly_dark", xaxis_rangeslider_visible=False)
 st.plotly_chart(fig, use_container_width=True)
 
@@ -137,15 +145,14 @@ def fetch_option_chain(idx):
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        st.warning(f"Could not fetch option chain: {e}")
         return None
 
 # Yahoo symbol -> NSE Option Chain mapping
 yahoo_to_nse = {
-    "^NSEI": "NIFTY",          # Nifty 50
-    "^NSEBANK": "BANKNIFTY",   # Bank Nifty
-    "^NSEFIN": "FINNIFTY",     # Fin Nifty
-    "^MIDCPNIFTY": "MIDCPNIFTY" # Midcap Nifty
+    "^NSEI": "NIFTY",
+    "^NSEBANK": "BANKNIFTY",
+    "^NSEFIN": "FINNIFTY",
+    "^MIDCPNIFTY": "MIDCPNIFTY"
 }
 
 symbol_key = yahoo_to_nse.get(symbol.upper(), None)
@@ -163,10 +170,13 @@ if symbol_key:
                 for d in data
             ])
             pcr = df_oc["PE_OI"].sum() / max(df_oc["CE_OI"].sum(), 1)
-            st.write(f"Underlying: {underlying:.2f} | PCR: {pcr:.2f}")
-            st.dataframe(df_oc.sort_values("strike").head(15))
-        except:
-            st.warning("Error parsing option chain data.")
+            st.metric("PCR", f"{pcr:.2f}")
+            st.write(f"Underlying: {underlying:.2f}")
+            st.dataframe(df_oc.sort_values("strike").head(20))
+        except Exception as e:
+            st.warning(f"Error parsing option chain data: {e}")
+    else:
+        st.warning("NSE blocked request (403). Try again later or use nsepython library.")
 else:
     st.info("Option Chain available only for NIFTY (^NSEI), BANKNIFTY (^NSEBANK), FINNIFTY (^NSEFIN), and MIDCPNIFTY (^MIDCPNIFTY).")
 
@@ -174,4 +184,6 @@ else:
 # Historical data & download
 # -------------------------
 st.subheader("Historical Data & Download")
-st
+st.dataframe(df.tail(50))
+csv = df.to_csv(index=False).encode()
+st.download_button("Download CSV", csv, f"{symbol}_data.csv", "text/csv")
