@@ -8,7 +8,7 @@ from nsepython import nse_optionchain_scrapper
 from streamlit_autorefresh import st_autorefresh
 
 # -------------------------
-# Page config (must be first Streamlit command)
+# Page config (first Streamlit command)
 # -------------------------
 st.set_page_config(page_title="Intraday Strategy + Options Dashboard", layout="wide")
 
@@ -35,7 +35,8 @@ st.subheader(f"📍 Nifty Spot: {nifty_price:.2f} | ATM Strike: {atm_strike}")
 # -------------------------
 symbol = "NIFTY"
 try:
-    oc_data = nse_optionchain_scrapper(symbol, "latest")
+    oc_data = nse_optionchain_scrapper(symbol)   # ✅ only one argument
+
     records = []
     for d in oc_data['records']['data']:
         strike = d['strikePrice']
