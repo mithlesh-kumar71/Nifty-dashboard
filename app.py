@@ -1,74 +1,88 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from nsepython import nse_optionchain_scrapper, nse_index_quote
+from nsepython import nse_optionchain_scrapper
 
-# ------------------- Helper Function -------------------
-def fetch_option_chain(symbol="NIFTY"):
+# Streamlit Page Config
+st.set_page_config(page_title="NSE Option Chain + PCR Dashboard", layout="wide")
+
+st.title("📊 NSE Option Chain & PCR Dashboard")
+
+# Dropdown for symbol
+symbol = st.selectbox("Select Symbol", ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "SBIN"])
+
+# Fetch Option Chain Data
+@st.cache_data(ttl=300)  # cache for 5 minutes
+def fetch_option_chain(symbol):
     try:
         data = nse_optionchain_scrapper(symbol)
-        records = []
-        for rec in data["records"]["data"]:
-            if "CE" in rec and "PE" in rec:
-                records.append({
-                    "strikePrice": rec["strikePrice"],
-                    "CE_OI": rec["CE"]["openInterest"],
-                    "CE_ChngOI": rec["CE"]["changeinOpenInterest"],
-                    "PE_OI": rec["PE"]["openInterest"],
-                    "PE_ChngOI": rec["PE"]["changeinOpenInterest"],
-                })
-        return pd.DataFrame(records)
+        return data
     except Exception as e:
         st.error(f"Error fetching option chain: {e}")
-        return pd.DataFrame()
+        return None
 
-# ------------------- Main -------------------
-st.set_page_config(page_title="Options Dashboard", layout="wide")
-st.title("📊 NIFTY Options Dashboard")
+data = fetch_option_chain(symbol)
 
-symbol = st.selectbox("Select Symbol", ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "SBIN"])
-df = fetch_option_chain(symbol)
+if data:
+    # Convert to DataFrame
+    ce_data = pd.DataFrame(data['records']['data'])
+    ce_data = ce_data[['strikePrice', 'CE', 'PE']]
 
-if not df.empty:
-    # ATM Calculation
-    spot = nse_index_quote(symbol)["lastPrice"]
-    atm_strike = min(df["strikePrice"], key=lambda x: abs(x - spot))
+    # Extract required fields
+    rows = []
+    for _, row in ce_data.iterrows():
+        strike = row['strikePrice']
+        ce_oi = row['CE']['openInterest'] if 'CE' in row and row['CE'] else 0
+        pe_oi = row['PE']['openInterest'] if 'PE' in row and row['PE'] else 0
+        ce_chng = row['CE']['changeinOpenInterest'] if 'CE' in row and row['CE'] else 0
+        pe_chng = row['PE']['changeinOpenInterest'] if 'PE' in row and row['PE'] else 0
+        rows.append([strike, ce_oi, pe_oi, ce_chng, pe_chng])
 
-    # Filter ±300 points around ATM
-    df_filtered = df[(df["strikePrice"] >= atm_strike - 300) & (df["strikePrice"] <= atm_strike + 300)]
+    df = pd.DataFrame(rows, columns=["Strike Price", "CE_OI", "PE_OI", "CE_Chng_OI", "PE_Chng_OI"])
 
-    # Add PCR columns
-    df_filtered["PCR_OI"] = (df_filtered["PE_OI"] / df_filtered["CE_OI"]).round(2)
-    df_filtered["PCR_ChngOI"] = (df_filtered["PE_ChngOI"] / df_filtered["CE_ChngOI"]).round(2)
+    # Calculate PCR
+    df["PCR_OI"] = (df["PE_OI"] / df["CE_OI"]).replace([float("inf"), -float("inf")], 0)
+    df["PCR_Chng_OI"] = (df["PE_Chng_OI"] / df["CE_Chng_OI"]).replace([float("inf"), -float("inf")], 0)
 
-    st.subheader(f"Option Chain (±300 points of ATM {atm_strike})")
-    st.dataframe(df_filtered.style.apply(
-        lambda row: ['background-color: yellow' if row["strikePrice"] == atm_strike else '' for _ in row],
-        axis=1
-    ))
+    # Find ATM Strike (nearest to last price from underlying)
+    try:
+        underlying_price = data['records']['underlyingValue']
+        atm_strike = min(df["Strike Price"], key=lambda x: abs(x - underlying_price))
+    except:
+        atm_strike = df["Strike Price"].median()
 
-    # ------------------- Plotly Line Chart -------------------
-    st.subheader("📈 PCR Change in OI (ATM Strike)")
-    fig = go.Figure()
+    # Filter ±300 points range around ATM
+    df_filtered = df[(df["Strike Price"] >= atm_strike - 300) & (df["Strike Price"] <= atm_strike + 300)]
 
-    fig.add_trace(go.Scatter(
-        x=df_filtered["strikePrice"],
-        y=df_filtered["PCR_ChngOI"],
-        mode="lines+markers",
-        name="Change in OI PCR",
-        line=dict(color="blue"),
-    ))
+    # Highlight ATM row
+    def highlight_atm(row):
+        return ['background-color: yellow' if row["Strike Price"] == atm_strike else '' for _ in row]
 
-    # Reference line at 1
-    fig.add_hline(y=1, line_dash="dash", line_color="red")
+    st.subheader(f"Option Chain Data (ATM = {atm_strike})")
+    st.dataframe(df_filtered.style.apply(highlight_atm, axis=1).format("{:.2f}", subset=["PCR_OI", "PCR_Chng_OI"]))
 
-    fig.update_layout(
-        title=f"Change in OI PCR around ATM {atm_strike}",
-        xaxis_title="Strike Price",
-        yaxis_title="PCR (PE_ChngOI / CE_ChngOI)",
-        template="plotly_white"
-    )
+    # Plot PCR Change in OI (ATM Strike)
+    atm_row = df[df["Strike Price"] == atm_strike]
+    if not atm_row.empty:
+        atm_pcr_chng = atm_row["PCR_Chng_OI"].values[0]
 
-    st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_filtered["Strike Price"],
+            y=df_filtered["PCR_Chng_OI"],
+            mode="lines+markers",
+            name="PCR Change OI"
+        ))
+
+        # Reference line at 1
+        fig.add_hline(y=1, line_dash="dot", line_color="red")
+
+        fig.update_layout(
+            title="PCR Change in OI Around ATM",
+            xaxis_title="Strike Price",
+            yaxis_title="PCR Change OI",
+            template="plotly_white"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning("No option chain data available right now.")
+    st.warning("No data available. Please try again later.")
