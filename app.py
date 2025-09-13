@@ -1,106 +1,74 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-from nsepython import nse_optionchain_scrapper
+import plotly.graph_objects as go
+from nsepython import nse_optionchain_scrapper, nse_index_quote
 
-# -----------------------------------------------------
-# Streamlit Page Setup
-# -----------------------------------------------------
-st.set_page_config(page_title="Intraday Options Dashboard", layout="wide")
+# ------------------- Helper Function -------------------
+def fetch_option_chain(symbol="NIFTY"):
+    try:
+        data = nse_optionchain_scrapper(symbol)
+        records = []
+        for rec in data["records"]["data"]:
+            if "CE" in rec and "PE" in rec:
+                records.append({
+                    "strikePrice": rec["strikePrice"],
+                    "CE_OI": rec["CE"]["openInterest"],
+                    "CE_ChngOI": rec["CE"]["changeinOpenInterest"],
+                    "PE_OI": rec["PE"]["openInterest"],
+                    "PE_ChngOI": rec["PE"]["changeinOpenInterest"],
+                })
+        return pd.DataFrame(records)
+    except Exception as e:
+        st.error(f"Error fetching option chain: {e}")
+        return pd.DataFrame()
 
-st.title("📊 Intraday Options Trading Dashboard")
+# ------------------- Main -------------------
+st.set_page_config(page_title="Options Dashboard", layout="wide")
+st.title("📊 NIFTY Options Dashboard")
 
-# -----------------------------------------------------
-# Dropdown for index / stocks
-# -----------------------------------------------------
-symbol = st.selectbox(
-    "Select Symbol",
-    ["NIFTY", "RELIANCE", "TCS", "SBIN"]
-)
+symbol = st.selectbox("Select Symbol", ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "SBIN"])
+df = fetch_option_chain(symbol)
 
-# -----------------------------------------------------
-# Fetch Option Chain Data
-# -----------------------------------------------------
-try:
-    option_chain = nse_optionchain_scrapper(symbol)
-    records = option_chain['records']['data']
+if not df.empty:
+    # ATM Calculation
+    spot = nse_index_quote(symbol)["lastPrice"]
+    atm_strike = min(df["strikePrice"], key=lambda x: abs(x - spot))
 
-    # Flatten CE and PE legs
-    data = []
-    for r in records:
-        strike = r['strikePrice']
-        ce_oi = r['CE']['openInterest'] if 'CE' in r else 0
-        ce_chng_oi = r['CE']['changeinOpenInterest'] if 'CE' in r else 0
-        pe_oi = r['PE']['openInterest'] if 'PE' in r else 0
-        pe_chng_oi = r['PE']['changeinOpenInterest'] if 'PE' in r else 0
+    # Filter ±300 points around ATM
+    df_filtered = df[(df["strikePrice"] >= atm_strike - 300) & (df["strikePrice"] <= atm_strike + 300)]
 
-        ratio = round((pe_chng_oi / ce_chng_oi), 2) if ce_chng_oi != 0 else np.nan
+    # Add PCR columns
+    df_filtered["PCR_OI"] = (df_filtered["PE_OI"] / df_filtered["CE_OI"]).round(2)
+    df_filtered["PCR_ChngOI"] = (df_filtered["PE_ChngOI"] / df_filtered["CE_ChngOI"]).round(2)
 
-        data.append({
-            "Strike Price": strike,
-            "CE_OI": ce_oi,
-            "PE_OI": pe_oi,
-            "CE_Chng_in_OI": ce_chng_oi,
-            "PE_Chng_in_OI": pe_chng_oi,
-            "PE/CE_Chng_OI_Ratio": ratio
-        })
+    st.subheader(f"Option Chain (±300 points of ATM {atm_strike})")
+    st.dataframe(df_filtered.style.apply(
+        lambda row: ['background-color: yellow' if row["strikePrice"] == atm_strike else '' for _ in row],
+        axis=1
+    ))
 
-    df = pd.DataFrame(data)
+    # ------------------- Plotly Line Chart -------------------
+    st.subheader("📈 PCR Change in OI (ATM Strike)")
+    fig = go.Figure()
 
-except Exception as e:
-    st.error(f"Error fetching data: {e}")
-    st.stop()
+    fig.add_trace(go.Scatter(
+        x=df_filtered["strikePrice"],
+        y=df_filtered["PCR_ChngOI"],
+        mode="lines+markers",
+        name="Change in OI PCR",
+        line=dict(color="blue"),
+    ))
 
-# -----------------------------------------------------
-# Filter Data: ATM ± 300
-# -----------------------------------------------------
-underlying = option_chain['records']['underlyingValue']
-atm_strike = int(round(underlying / 50) * 50)   # nearest 50
-df_filtered = df[(df["Strike Price"] >= atm_strike - 300) & 
-                 (df["Strike Price"] <= atm_strike + 300)]
+    # Reference line at 1
+    fig.add_hline(y=1, line_dash="dash", line_color="red")
 
-# -----------------------------------------------------
-# Highlight ATM
-# -----------------------------------------------------
-def highlight_atm(row):
-    return ['background-color: yellow' if row["Strike Price"] == atm_strike else '' for _ in row]
+    fig.update_layout(
+        title=f"Change in OI PCR around ATM {atm_strike}",
+        xaxis_title="Strike Price",
+        yaxis_title="PCR (PE_ChngOI / CE_ChngOI)",
+        template="plotly_white"
+    )
 
-# -----------------------------------------------------
-# Display Data
-# -----------------------------------------------------
-st.subheader(f"Option Chain for {symbol} (ATM Strike: {atm_strike})")
-
-st.dataframe(
-    df_filtered.rename(columns={
-        "Strike Price": "Strike",
-        "CE_OI": "CE OI",
-        "PE_OI": "PE OI",
-        "CE_Chng_in_OI": "CE Chng OI",
-        "PE_Chng_in_OI": "PE Chng OI",
-        "PE/CE_Chng_OI_Ratio": "PE/CE OI Ratio"
-    }).style.apply(highlight_atm, axis=1)
-)
-
-# -----------------------------------------------------
-# Plot PCR (ATM Change in OI Ratio)
-# -----------------------------------------------------
-st.subheader("ATM PCR Trend (Change in OI Ratio)")
-
-atm_row = df[df["Strike Price"] == atm_strike]
-if not atm_row.empty:
-    latest_ratio = atm_row["PE/CE_Chng_OI_Ratio"].values[0]
-
-    fig, ax = plt.subplots()
-    ax.axhline(1, color="black", linestyle="--")  # Neutral line at 1
-    ax.plot([0, 1], [latest_ratio, latest_ratio], marker="o",
-            color="green" if latest_ratio > 1 else "red")
-
-    ax.set_ylim(0, max(2, latest_ratio + 0.5))
-    ax.set_xticks([])
-    ax.set_ylabel("PCR (PE/CE Change OI Ratio)")
-    ax.set_title(f"ATM Strike {atm_strike} PCR = {latest_ratio:.2f}")
-
-    st.pyplot(fig)
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning("ATM strike not found in option chain data.")
+    st.warning("No option chain data available right now.")
