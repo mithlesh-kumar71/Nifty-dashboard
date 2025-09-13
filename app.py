@@ -5,6 +5,12 @@ import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime
 from nsepython import nse_optionchain_scrapper
+from streamlit_autorefresh import st_autorefresh
+
+# -------------------------
+# Auto-refresh every 15 minutes (900000 ms)
+# -------------------------
+st_autorefresh(interval=900000, key="refresh")
 
 # -------------------------
 # Page config
