@@ -1,88 +1,91 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import numpy as np
+import matplotlib.pyplot as plt
 from nsepython import nse_optionchain_scrapper
 
-# Streamlit Page Config
-st.set_page_config(page_title="NSE Option Chain + PCR Dashboard", layout="wide")
+# -------------------------
+# Page Config
+# -------------------------
+st.set_page_config(page_title="NIFTY Options Dashboard", layout="wide")
+st.title("📊 NIFTY Options Dashboard with PCR & OI Analysis")
 
-st.title("📊 NSE Option Chain & PCR Dashboard")
+# -------------------------
+# Sidebar Controls
+# -------------------------
+symbol = st.sidebar.selectbox("Select Symbol", ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "SBIN"], index=0)
 
-# Dropdown for symbol
-symbol = st.selectbox("Select Symbol", ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "SBIN"])
-
+# -------------------------
 # Fetch Option Chain Data
-@st.cache_data(ttl=300)  # cache for 5 minutes
-def fetch_option_chain(symbol):
+# -------------------------
+@st.cache_data(ttl=60)
+def fetch_option_chain(sym):
     try:
-        data = nse_optionchain_scrapper(symbol)
-        return data
+        data = nse_optionchain_scrapper(sym)
+        ce_data = pd.DataFrame(data['records']['data'])
+        return ce_data, data['records']['underlyingValue']
     except Exception as e:
-        st.error(f"Error fetching option chain: {e}")
-        return None
+        st.error(f"Error fetching data: {e}")
+        return None, None
 
-data = fetch_option_chain(symbol)
+ce_data, underlying = fetch_option_chain(symbol)
 
-if data:
-    # Convert to DataFrame
-    ce_data = pd.DataFrame(data['records']['data'])
-    ce_data = ce_data[['strikePrice', 'CE', 'PE']]
+if ce_data is None:
+    st.stop()
 
-    # Extract required fields
-    rows = []
-    for _, row in ce_data.iterrows():
-        strike = row['strikePrice']
-        ce_oi = row['CE']['openInterest'] if 'CE' in row and row['CE'] else 0
-        pe_oi = row['PE']['openInterest'] if 'PE' in row and row['PE'] else 0
-        ce_chng = row['CE']['changeinOpenInterest'] if 'CE' in row and row['CE'] else 0
-        pe_chng = row['PE']['changeinOpenInterest'] if 'PE' in row and row['PE'] else 0
-        rows.append([strike, ce_oi, pe_oi, ce_chng, pe_chng])
+# -------------------------
+# Extract OI Data
+# -------------------------
+rows = []
+for _, row in ce_data.iterrows():
+    strike = row['strikePrice']
 
-    df = pd.DataFrame(rows, columns=["Strike Price", "CE_OI", "PE_OI", "CE_Chng_OI", "PE_Chng_OI"])
+    ce_oi = row['CE']['openInterest'] if isinstance(row['CE'], dict) else 0
+    pe_oi = row['PE']['openInterest'] if isinstance(row['PE'], dict) else 0
 
-    # Calculate PCR
-    df["PCR_OI"] = (df["PE_OI"] / df["CE_OI"]).replace([float("inf"), -float("inf")], 0)
-    df["PCR_Chng_OI"] = (df["PE_Chng_OI"] / df["CE_Chng_OI"]).replace([float("inf"), -float("inf")], 0)
+    ce_chng = row['CE']['changeinOpenInterest'] if isinstance(row['CE'], dict) else 0
+    pe_chng = row['PE']['changeinOpenInterest'] if isinstance(row['PE'], dict) else 0
 
-    # Find ATM Strike (nearest to last price from underlying)
-    try:
-        underlying_price = data['records']['underlyingValue']
-        atm_strike = min(df["Strike Price"], key=lambda x: abs(x - underlying_price))
-    except:
-        atm_strike = df["Strike Price"].median()
+    rows.append([strike, ce_oi, pe_oi, ce_chng, pe_chng])
 
-    # Filter ±300 points range around ATM
-    df_filtered = df[(df["Strike Price"] >= atm_strike - 300) & (df["Strike Price"] <= atm_strike + 300)]
+df = pd.DataFrame(rows, columns=["strike", "CE_OI", "PE_OI", "CE_Chng_OI", "PE_Chng_OI"])
 
-    # Highlight ATM row
-    def highlight_atm(row):
-        return ['background-color: yellow' if row["Strike Price"] == atm_strike else '' for _ in row]
+# -------------------------
+# Calculate Ratios
+# -------------------------
+df["PCR"] = (df["PE_OI"] / df["CE_OI"].replace(0, np.nan)).round(2)
+df["Chng_OI_PCR"] = (df["PE_Chng_OI"] / df["CE_Chng_OI"].replace(0, np.nan)).round(2)
 
-    st.subheader(f"Option Chain Data (ATM = {atm_strike})")
-    st.dataframe(df_filtered.style.apply(highlight_atm, axis=1).format("{:.2f}", subset=["PCR_OI", "PCR_Chng_OI"]))
+# -------------------------
+# Filter ATM ± 300
+# -------------------------
+atm_strike = round(underlying / 50) * 50  # rounded to nearest 50
+df_filtered = df[(df["strike"] >= atm_strike - 300) & (df["strike"] <= atm_strike + 300)]
 
-    # Plot PCR Change in OI (ATM Strike)
-    atm_row = df[df["Strike Price"] == atm_strike]
-    if not atm_row.empty:
-        atm_pcr_chng = atm_row["PCR_Chng_OI"].values[0]
+# Highlight ATM strike
+def highlight_atm(row):
+    return ['background-color: yellow' if row["strike"] == atm_strike else '' for _ in row]
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_filtered["Strike Price"],
-            y=df_filtered["PCR_Chng_OI"],
-            mode="lines+markers",
-            name="PCR Change OI"
-        ))
+st.subheader(f"Underlying: {underlying:.2f} | ATM Strike: {atm_strike}")
+st.dataframe(
+    df_filtered.style.apply(highlight_atm, axis=1),
+    use_container_width=True
+)
 
-        # Reference line at 1
-        fig.add_hline(y=1, line_dash="dot", line_color="red")
+# -------------------------
+# PCR Line Chart (ATM only)
+# -------------------------
+atm_row = df[df["strike"] == atm_strike]
+if not atm_row.empty:
+    atm_pcr_series = atm_row["Chng_OI_PCR"].values
 
-        fig.update_layout(
-            title="PCR Change in OI Around ATM",
-            xaxis_title="Strike Price",
-            yaxis_title="PCR Change OI",
-            template="plotly_white"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    fig, ax = plt.subplots()
+    ax.axhline(1, color="black", linestyle="--", linewidth=1)
+    ax.plot([0], atm_pcr_series, marker="o", markersize=8,
+            color="green" if atm_pcr_series[0] > 1 else "red")
+
+    ax.set_ylim(0, max(2, atm_pcr_series[0] + 0.5))
+    ax.set_title(f"ATM ({atm_strike}) Change in OI PCR")
+    st.pyplot(fig)
 else:
-    st.warning("No data available. Please try again later.")
+    st.warning("ATM strike data not available yet.")
