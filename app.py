@@ -66,32 +66,32 @@ def supertrend(df, period=10, multiplier=3):
     final_upperband = upperband.copy()
     final_lowerband = lowerband.copy()
 
+    # Fix: ensure scalars using .iat[]
     for i in range(1, len(out)):
-        final_upperband.iloc[i] = (
-            min(upperband.iloc[i], final_upperband.iloc[i - 1])
-            if out["Close"].iloc[i - 1] <= final_upperband.iloc[i - 1]
-            else upperband.iloc[i]
-        )
-        final_lowerband.iloc[i] = (
-            max(lowerband.iloc[i], final_lowerband.iloc[i - 1])
-            if out["Close"].iloc[i - 1] >= final_lowerband.iloc[i - 1]
-            else lowerband.iloc[i]
-        )
+        if out["Close"].iat[i - 1] <= final_upperband.iat[i - 1]:
+            final_upperband.iat[i] = min(upperband.iat[i], final_upperband.iat[i - 1])
+        else:
+            final_upperband.iat[i] = upperband.iat[i]
+
+        if out["Close"].iat[i - 1] >= final_lowerband.iat[i - 1]:
+            final_lowerband.iat[i] = max(lowerband.iat[i], final_lowerband.iat[i - 1])
+        else:
+            final_lowerband.iat[i] = lowerband.iat[i]
 
     trend = np.ones(len(out))
     st_line = np.zeros(len(out))
     for i in range(len(out)):
         if i == 0:
             trend[i] = 1
-            st_line[i] = final_lowerband.iloc[i]
+            st_line[i] = final_lowerband.iat[i]
         else:
-            if out["Close"].iloc[i] > final_upperband.iloc[i - 1]:
+            if out["Close"].iat[i] > final_upperband.iat[i - 1]:
                 trend[i] = 1
-            elif out["Close"].iloc[i] < final_lowerband.iloc[i - 1]:
+            elif out["Close"].iat[i] < final_lowerband.iat[i - 1]:
                 trend[i] = -1
             else:
                 trend[i] = trend[i - 1]
-            st_line[i] = final_lowerband.iloc[i] if trend[i] == 1 else final_upperband.iloc[i]
+            st_line[i] = final_lowerband.iat[i] if trend[i] == 1 else final_upperband.iat[i]
 
     out["Supertrend"] = st_line
     out["Trend"] = trend
@@ -115,23 +115,24 @@ latest_close = df["Close"].iloc[-1]
 # Plotting
 # -------------------------
 fig = go.Figure()
+time_col = "Datetime" if "Datetime" in df.columns else "Date"
+
 if chart_type == "Candlestick":
     fig.add_trace(go.Candlestick(
-        x=df["Datetime"] if "Datetime" in df.columns else df["Date"],
+        x=df[time_col],
         open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
         name="Candlestick"
     ))
 else:
     fig.add_trace(go.Scatter(
-        x=df["Datetime"] if "Datetime" in df.columns else df["Date"],
-        y=df["Close"], mode="lines", name="Close"
+        x=df[time_col], y=df["Close"], mode="lines", name="Close"
     ))
 
 fig.add_trace(go.Scatter(
-    x=df.index, y=df["Supertrend"], mode="lines", name="Supertrend", line=dict(color="orange")
+    x=df[time_col], y=df["Supertrend"], mode="lines", name="Supertrend", line=dict(color="orange")
 ))
 fig.add_trace(go.Scatter(
-    x=df.index, y=df["VWAP"], mode="lines", name="VWAP", line=dict(color="cyan", dash="dot")
+    x=df[time_col], y=df["VWAP"], mode="lines", name="VWAP", line=dict(color="cyan", dash="dot")
 ))
 fig.update_layout(title=f"{symbol_name} - {interval} Chart", template="plotly_dark")
 
@@ -145,7 +146,7 @@ st.metric(label=f"Latest Signal for {symbol_name}", value=latest_signal, delta=f
 
 # RSI Plot
 st.subheader("📉 RSI Indicator")
-fig_rsi = go.Figure([go.Scatter(x=df.index, y=df["RSI"], mode="lines")])
+fig_rsi = go.Figure([go.Scatter(x=df[time_col], y=df["RSI"], mode="lines")])
 fig_rsi.add_hrect(y0=30, y1=70, fillcolor="green", opacity=0.2, line_width=0)
 fig_rsi.update_layout(title="RSI (14)", template="plotly_dark")
 st.plotly_chart(fig_rsi, use_container_width=True)
