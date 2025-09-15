@@ -1,25 +1,26 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
+import yfinance as yf
 import matplotlib.pyplot as plt
 
 # ----------------- ATR Calculation -----------------
 def atr(df, period=14):
     df['H-L'] = df['High'] - df['Low']
-    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
-    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
+    df['H-PC'] = (df['High'] - df['Close'].shift(1)).abs()
+    df['L-PC'] = (df['Low'] - df['Close'].shift(1)).abs()
     df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
-    df['ATR'] = df['TR'].rolling(period).mean()
+    df['ATR'] = df['TR'].rolling(window=period, min_periods=1).mean()
     return df
 
-# ----------------- SUPER TREND STRATEGY -----------------
+# ----------------- Supertrend -----------------
 def supertrend(df, period=7, multiplier=3):
     df = atr(df, period)
     hl2 = (df['High'] + df['Low']) / 2
+    atr_values = df['ATR']
 
-    df['UpperBand'] = hl2 + (multiplier * df['ATR'])
-    df['LowerBand'] = hl2 - (multiplier * df['ATR'])
+    df['UpperBand'] = hl2 + (multiplier * atr_values)
+    df['LowerBand'] = hl2 - (multiplier * atr_values)
     df['Supertrend'] = np.nan
 
     for i in range(period, len(df)):
@@ -32,65 +33,69 @@ def supertrend(df, period=7, multiplier=3):
 
     return df
 
-# ----------------- APP -----------------
-st.set_page_config(page_title="Trading Signals", layout="wide")
-st.title("📊 Intraday Trading Signal App (NIFTY 50 + NIFTY Index)")
+# ----------------- Streamlit App -----------------
+st.set_page_config(page_title="NIFTY50 Options Dashboard", layout="wide")
+st.title("📈 Intraday Options Trading Dashboard")
 
-# Mapping of NIFTY 50 Stocks with Yahoo Finance tickers
-symbols = {
-    "NIFTY": "^NSEI",
-    "Reliance": "RELIANCE.NS", "TCS": "TCS.NS", "Infosys": "INFY.NS",
-    "HDFC Bank": "HDFCBANK.NS", "ICICI Bank": "ICICIBANK.NS", "SBI": "SBIN.NS",
-    "Kotak Bank": "KOTAKBANK.NS", "Axis Bank": "AXISBANK.NS", "HDFC": "HDFC.NS",
-    "Bajaj Finance": "BAJFINANCE.NS", "Bajaj Finserv": "BAJAJFINSV.NS",
-    "Hindustan Unilever": "HINDUNILVR.NS", "ITC": "ITC.NS",
-    "Larsen & Toubro": "LT.NS", "Asian Paints": "ASIANPAINT.NS",
-    "Tata Motors": "TATAMOTORS.NS", "Tata Steel": "TATASTEEL.NS",
-    "JSW Steel": "JSWSTEEL.NS", "UltraTech Cement": "ULTRACEMCO.NS",
-    "Maruti Suzuki": "MARUTI.NS", "Mahindra & Mahindra": "M&M.NS",
-    "Bharti Airtel": "BHARTIARTL.NS", "HCL Tech": "HCLTECH.NS",
-    "Tech Mahindra": "TECHM.NS", "Wipro": "WIPRO.NS",
-    "Power Grid": "POWERGRID.NS", "NTPC": "NTPC.NS",
-    "ONGC": "ONGC.NS", "Coal India": "COALINDIA.NS",
-    "Adani Ports": "ADANIPORTS.NS", "Adani Enterprises": "ADANIENT.NS",
-    "Grasim": "GRASIM.NS", "Nestle India": "NESTLEIND.NS",
-    "Cipla": "CIPLA.NS", "Sun Pharma": "SUNPHARMA.NS",
-    "Divi's Lab": "DIVISLAB.NS", "Dr. Reddy": "DRREDDY.NS",
-    "Britannia": "BRITANNIA.NS", "Eicher Motors": "EICHERMOT.NS",
-    "Hero MotoCorp": "HEROMOTOCO.NS", "Titan": "TITAN.NS",
-    "Apollo Hospitals": "APOLLOHOSP.NS", "SBI Life": "SBILIFE.NS",
-    "HDFC Life": "HDFCLIFE.NS", "ICICI Lombard": "ICICIGI.NS",
-    "IndusInd Bank": "INDUSINDBK.NS", "Bajaj Auto": "BAJAJ-AUTO.NS",
-    "Shree Cement": "SHREECEM.NS", "UPL": "UPL.NS"
+# ✅ NIFTY50 stocks
+nifty50_stocks = {
+    "NIFTY 50": "^NSEI",
+    "Reliance": "RELIANCE.NS",
+    "TCS": "TCS.NS",
+    "HDFC Bank": "HDFCBANK.NS",
+    "ICICI Bank": "ICICIBANK.NS",
+    "Infosys": "INFY.NS",
+    "Kotak Bank": "KOTAKBANK.NS",
+    "SBI": "SBIN.NS",
+    "Tata Motors": "TATAMOTORS.NS",
+    "Axis Bank": "AXISBANK.NS",
+    "HCL Tech": "HCLTECH.NS",
+    "Bajaj Finance": "BAJFINANCE.NS",
+    "Bharti Airtel": "BHARTIARTL.NS",
+    "ITC": "ITC.NS",
+    "Larsen & Toubro": "LT.NS",
+    "Maruti": "MARUTI.NS",
+    "HUL": "HINDUNILVR.NS",
+    "Wipro": "WIPRO.NS",
+    "Sun Pharma": "SUNPHARMA.NS",
+    "UltraTech Cement": "ULTRACEMCO.NS",
+    # 👉 You can extend to all NIFTY50 stocks
 }
 
-# User input
-choice = st.selectbox("Choose Symbol", list(symbols.keys()))
-interval = st.selectbox("Timeframe", ["5m", "15m", "30m", "1h"])
-df = yf.download(symbols[choice], period="30d", interval=interval)
+# Dropdown
+stock = st.selectbox("Select Stock", list(nifty50_stocks.keys()))
+symbol = nifty50_stocks[stock]
 
-if not df.empty:
-    df = supertrend(df)
+# Data interval
+interval = st.selectbox("Interval", ["5m", "15m", "1h", "1d"])
 
-    # Plot chart
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df.index, df["Close"], label="Close Price")
-    buy_signals = df[df["Supertrend"] == 1]
-    sell_signals = df[df["Supertrend"] == -1]
-    ax.scatter(buy_signals.index, buy_signals["Close"], marker="^", color="g", label="Buy", s=100)
-    ax.scatter(sell_signals.index, sell_signals["Close"], marker="v", color="r", label="Sell", s=100)
-    ax.legend()
-    st.pyplot(fig)
+# Fetch OHLCV
+df = yf.download(symbol, period="1mo", interval=interval)
+df.dropna(inplace=True)
 
-    # Show latest signal
-    latest_signal = df["Supertrend"].iloc[-1]
-    latest_price = df["Close"].iloc[-1]
+# Compute supertrend
+df = supertrend(df)
 
-    if latest_signal == 1:
-        st.success(f"✅ BUY Signal for {choice} at {latest_price:.2f}")
-    elif latest_signal == -1:
-        st.error(f"❌ SELL Signal for {choice} at {latest_price:.2f}")
-    else:
-        st.warning(f"⚠️ No clear signal for {choice}")
-else:
-    st.error("No data available. Try a different symbol/interval.")
+# Last Signal
+last_signal = df['Supertrend'].iloc[-1]
+signal_text = "📢 BUY Signal" if last_signal == 1 else "📉 SELL Signal"
+
+st.subheader(f"Latest Trend for {stock}: {signal_text}")
+
+# Plot chart
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.plot(df.index, df['Close'], label="Close Price", color="blue")
+buy_signals = df[df['Supertrend'] == 1]
+sell_signals = df[df['Supertrend'] == -1]
+ax.scatter(buy_signals.index, buy_signals['Close'], marker="^", color="green", label="Buy Signal", alpha=1)
+ax.scatter(sell_signals.index, sell_signals['Close'], marker="v", color="red", label="Sell Signal", alpha=1)
+
+ax.set_title(f"{stock} Price with Supertrend Signals")
+ax.set_xlabel("Date")
+ax.set_ylabel("Price")
+ax.legend()
+st.pyplot(fig)
+
+# Show table
+st.subheader("Recent Data")
+st.dataframe(df.tail(20))
