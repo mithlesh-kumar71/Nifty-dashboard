@@ -21,6 +21,12 @@ def fetch_option_chain(symbol):
         st.error(f"Error fetching option chain: {e}")
         return None
 
+def calculate_pcr(df):
+    """Calculates PCR for OI and Change in OI."""
+    df["PCR_OI"] = (df["PE_OI"] / df["CE_OI"]).replace([float("inf"), -float("inf")], 0).fillna(0)
+    df["PCR_Chng_OI"] = (df["PE_Chng_OI"] / df["CE_Chng_OI"]).replace([float("inf"), -float("inf")], 0).fillna(0)
+    return df
+
 data = fetch_option_chain(symbol)
 
 if data:
@@ -41,8 +47,7 @@ if data:
     df = pd.DataFrame(rows, columns=["Strike Price", "CE_OI", "PE_OI", "CE_Chng_OI", "PE_Chng_OI"])
 
     # Calculate PCR
-    df["PCR_OI"] = (df["PE_OI"] / df["CE_OI"]).replace([float("inf"), -float("inf")], 0)
-    df["PCR_Chng_OI"] = (df["PE_Chng_OI"] / df["CE_Chng_OI"]).replace([float("inf"), -float("inf")], 0)
+    df = calculate_pcr(df)
 
     # Find ATM Strike (nearest to last price from underlying)
     try:
