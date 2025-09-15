@@ -1,134 +1,107 @@
-import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import streamlit as st
+import ta
+import plotly.graph_objects as go
 
-# ---------------- Supertrend Calculation ----------------
-def atr(df, period=14):
-    df['H-L'] = df['High'] - df['Low']
-    df['H-C'] = abs(df['High'] - df['Close'].shift())
-    df['L-C'] = abs(df['Low'] - df['Close'].shift())
-    df['TR'] = df[['H-L', 'H-C', 'L-C']].max(axis=1)
-    df['ATR'] = df['TR'].rolling(window=period).mean()
-    return df
+# ---------------- SUPER TREND FUNCTION ----------------
+def supertrend(df, period=14, multiplier=3):
+    atr_indicator = ta.volatility.AverageTrueRange(
+        high=df['High'], low=df['Low'], close=df['Close'], window=period
+    )
+    atr = atr_indicator.average_true_range()   # Series, not DataFrame
 
-def supertrend(df, period=7, multiplier=3):
-    df = atr(df, period)
-    
-    # Ensure hl2 and ATR are Series, not DataFrames
-    hl2 = ((df['High'].astype(float) + df['Low'].astype(float)) / 2).astype(float)
-    atr_values = df['ATR'].astype(float)
+    hl2 = (df['High'] + df['Low']) / 2
+    df['UpperBand'] = hl2 + (multiplier * atr)
+    df['LowerBand'] = hl2 - (multiplier * atr)
 
-    df['UpperBand'] = hl2 + (multiplier * atr_values)
-    df['LowerBand'] = hl2 - (multiplier * atr_values)
-    df['Supertrend'] = np.nan
-
-    for i in range(period, len(df)):
-        if df['Close'].iloc[i] > df['UpperBand'].iloc[i - 1]:
-            df.loc[df.index[i], 'Supertrend'] = 1   # Buy signal
-        elif df['Close'].iloc[i] < df['LowerBand'].iloc[i - 1]:
-            df.loc[df.index[i], 'Supertrend'] = -1  # Sell signal
+    df['Supertrend'] = True
+    for i in range(1, len(df)):
+        if df['Close'][i] > df['UpperBand'][i-1]:
+            df.loc[df.index[i], 'Supertrend'] = True
+        elif df['Close'][i] < df['LowerBand'][i-1]:
+            df.loc[df.index[i], 'Supertrend'] = False
         else:
-            df.loc[df.index[i], 'Supertrend'] = df['Supertrend'].iloc[i - 1]
+            df.loc[df.index[i], 'Supertrend'] = df['Supertrend'][i-1]
+            if df['Supertrend'][i] and df['LowerBand'][i] < df['LowerBand'][i-1]:
+                df.loc[df.index[i], 'LowerBand'] = df['LowerBand'][i-1]
+            if not df['Supertrend'][i] and df['UpperBand'][i] > df['UpperBand'][i-1]:
+                df.loc[df.index[i], 'UpperBand'] = df['UpperBand'][i-1]
 
     return df
 
-# ---------------- Streamlit App ----------------
-st.set_page_config(page_title="Intraday Trading Dashboard", layout="wide")
-
-st.title("📊 Intraday Trading Signals (NIFTY & NIFTY50 Stocks)")
-
-# Dropdown with NIFTY50 stocks
-stocks = {
-    "NIFTY 50": "^NSEI",
-    "Reliance Industries": "RELIANCE.NS",
+# ---------------- STOCKS TO TRACK ----------------
+symbols_map = {
+    "NIFTY": "^NSEI",
+    "RELIANCE": "RELIANCE.NS",
+    "TATAMOTORS": "TATAMOTORS.NS",
+    "SBI": "SBIN.NS",
     "TCS": "TCS.NS",
-    "HDFC Bank": "HDFCBANK.NS",
-    "ICICI Bank": "ICICIBANK.NS",
-    "Infosys": "INFY.NS",
-    "State Bank of India": "SBIN.NS",
-    "Kotak Bank": "KOTAKBANK.NS",
-    "Tata Motors": "TATAMOTORS.NS",
-    "Axis Bank": "AXISBANK.NS",
-    "Larsen & Toubro": "LT.NS",
-    "Bajaj Finance": "BAJFINANCE.NS",
-    "Bharti Airtel": "BHARTIARTL.NS",
-    "Hindustan Unilever": "HINDUNILVR.NS",
-    "ITC": "ITC.NS",
-    "Asian Paints": "ASIANPAINT.NS",
-    "Wipro": "WIPRO.NS",
-    "ONGC": "ONGC.NS",
-    "Power Grid": "POWERGRID.NS",
-    "HCL Tech": "HCLTECH.NS",
-    "Maruti Suzuki": "MARUTI.NS",
-    "Sun Pharma": "SUNPHARMA.NS",
-    "NTPC": "NTPC.NS",
-    "UltraTech Cement": "ULTRACEMCO.NS",
-    "Tata Steel": "TATASTEEL.NS",
-    "JSW Steel": "JSWSTEEL.NS",
-    "Grasim": "GRASIM.NS",
-    "IndusInd Bank": "INDUSINDBK.NS",
-    "Bajaj Finserv": "BAJAJFINSV.NS",
-    "Adani Ports": "ADANIPORTS.NS",
-    "Tech Mahindra": "TECHM.NS",
-    "Cipla": "CIPLA.NS",
-    "Divi's Labs": "DIVISLAB.NS",
-    "Nestle India": "NESTLEIND.NS",
-    "Eicher Motors": "EICHERMOT.NS",
-    "Bajaj Auto": "BAJAJ-AUTO.NS",
-    "HDFC Life": "HDFCLIFE.NS",
-    "Britannia": "BRITANNIA.NS",
-    "Coal India": "COALINDIA.NS",
-    "SBI Life": "SBILIFE.NS",
-    "Hero MotoCorp": "HEROMOTOCO.NS",
-    "Dr Reddy's": "DRREDDY.NS",
-    "Apollo Hospitals": "APOLLOHOSP.NS",
-    "Adani Enterprises": "ADANIENT.NS",
-    "Tata Consumer": "TATACONSUM.NS",
-    "Hindalco": "HINDALCO.NS",
-    "Mahindra & Mahindra": "M&M.NS",
-    "JSW Energy": "JSWENERGY.NS"
+    "KOTAKBANK": "KOTAKBANK.NS",
+    "HDFCBANK": "HDFCBANK.NS",
+    "BEL": "BEL.NS",
+    "BAJFINANCE": "BAJFINANCE.NS",
+    "HAL": "HAL.NS",
+    "INFOSYS": "INFY.NS",
+    "VEDL": "VEDL.NS"
 }
 
-symbol = st.selectbox("Select Stock/Index", list(stocks.keys()))
-ticker = stocks[symbol]
+# ---------------- STREAMLIT APP ----------------
+st.set_page_config(layout="wide")
+st.title("📊 Market Trend & Signals Dashboard")
 
-# Interval choice
-interval = st.radio("Select Interval", ["15m", "30m", "1h", "1d"], index=0)
+selected_symbol = st.selectbox("Select Stock", list(symbols_map.keys()))
 
-# Download data
-st.write(f"Fetching data for **{symbol}** ({ticker}) ...")
-df = yf.download(ticker, period="60d" if interval != "1d" else "1y", interval=interval)
+# Load OHLCV data
+df = yf.download(symbols_map[selected_symbol], period="6mo", interval="1d")
+df = supertrend(df)
 
-if not df.empty:
-    df = supertrend(df)
+# Latest Signal
+latest_signal = "BUY ✅" if df['Supertrend'].iloc[-1] else "SELL ❌"
+st.subheader(f"📢 Latest Signal for {selected_symbol}: {latest_signal}")
 
-    st.subheader("📈 Price & Supertrend")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df.index, df['Close'], label="Close Price", color="blue")
-    ax.plot(df.index, df['UpperBand'], label="Upper Band", color="red", linestyle="--")
-    ax.plot(df.index, df['LowerBand'], label="Lower Band", color="green", linestyle="--")
+# Show last 10 rows
+st.subheader("🔎 Recent Trend Data")
+st.dataframe(df[['Close', 'Supertrend', 'UpperBand', 'LowerBand']].tail(10))
 
-    buy_signals = df[df['Supertrend'] == 1]
-    sell_signals = df[df['Supertrend'] == -1]
+# ---------------- CHART ----------------
+fig = go.Figure()
 
-    ax.scatter(buy_signals.index, buy_signals['Close'], marker="^", color="green", label="Buy Signal", alpha=1)
-    ax.scatter(sell_signals.index, sell_signals['Close'], marker="v", color="red", label="Sell Signal", alpha=1)
+# Candlestick
+fig.add_trace(go.Candlestick(
+    x=df.index,
+    open=df['Open'], high=df['High'],
+    low=df['Low'], close=df['Close'],
+    name="Candles"
+))
 
-    ax.set_title(f"{symbol} Supertrend ({interval})")
-    ax.legend()
-    st.pyplot(fig)
+# Supertrend bands
+fig.add_trace(go.Scatter(
+    x=df.index, y=df['UpperBand'],
+    line=dict(color="red", width=1), name="UpperBand"
+))
+fig.add_trace(go.Scatter(
+    x=df.index, y=df['LowerBand'],
+    line=dict(color="green", width=1), name="LowerBand"
+))
 
-    st.subheader("🔎 Latest Signals")
-    latest_signal = df['Supertrend'].iloc[-1]
-    if latest_signal == 1:
-        st.success("✅ Current Signal: **BUY**")
-    elif latest_signal == -1:
-        st.error("❌ Current Signal: **SELL**")
-    else:
-        st.info("⚖️ Current Signal: **Neutral**")
+# Buy/Sell markers
+buy_signals = df[(df['Supertrend'] == True) & (df['Supertrend'].shift(1) == False)]
+sell_signals = df[(df['Supertrend'] == False) & (df['Supertrend'].shift(1) == True)]
 
-    st.dataframe(df.tail(20))
-else:
-    st.error("No data found. Try another symbol/interval.")
+fig.add_trace(go.Scatter(
+    x=buy_signals.index, y=buy_signals['Close'],
+    mode="markers", marker=dict(color="green", size=10, symbol="triangle-up"),
+    name="BUY"
+))
+fig.add_trace(go.Scatter(
+    x=sell_signals.index, y=sell_signals['Close'],
+    mode="markers", marker=dict(color="red", size=10, symbol="triangle-down"),
+    name="SELL"
+))
+
+fig.update_layout(title=f"{selected_symbol} - Supertrend Strategy",
+                  xaxis_title="Date", yaxis_title="Price",
+                  template="plotly_dark", height=700)
+
+st.plotly_chart(fig, use_container_width=True)
