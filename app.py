@@ -4,21 +4,31 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+# ----------------- ATR Calculation -----------------
+def atr(df, period=14):
+    df['H-L'] = df['High'] - df['Low']
+    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
+    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
+    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+    df['ATR'] = df['TR'].rolling(period).mean()
+    return df
+
 # ----------------- SUPER TREND STRATEGY -----------------
 def supertrend(df, period=7, multiplier=3):
-    hl2 = (df["High"] + df["Low"]) / 2
-    df["ATR"] = df["High"].rolling(period).max() - df["Low"].rolling(period).min()
-    df["UpperBand"] = hl2 + (multiplier * df["ATR"])
-    df["LowerBand"] = hl2 - (multiplier * df["ATR"])
-    df["Supertrend"] = np.nan
+    df = atr(df, period)
+    hl2 = (df['High'] + df['Low']) / 2
+
+    df['UpperBand'] = hl2 + (multiplier * df['ATR'])
+    df['LowerBand'] = hl2 - (multiplier * df['ATR'])
+    df['Supertrend'] = np.nan
 
     for i in range(period, len(df)):
-        if df["Close"].iloc[i] > df["UpperBand"].iloc[i - 1]:
-            df.loc[df.index[i], "Supertrend"] = 1  # Buy
-        elif df["Close"].iloc[i] < df["LowerBand"].iloc[i - 1]:
-            df.loc[df.index[i], "Supertrend"] = -1  # Sell
+        if df['Close'].iloc[i] > df['UpperBand'].iloc[i - 1]:
+            df.loc[df.index[i], 'Supertrend'] = 1   # Buy
+        elif df['Close'].iloc[i] < df['LowerBand'].iloc[i - 1]:
+            df.loc[df.index[i], 'Supertrend'] = -1  # Sell
         else:
-            df.loc[df.index[i], "Supertrend"] = df["Supertrend"].iloc[i - 1]
+            df.loc[df.index[i], 'Supertrend'] = df['Supertrend'].iloc[i - 1]
 
     return df
 
